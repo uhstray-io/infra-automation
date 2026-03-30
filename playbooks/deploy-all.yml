@@ -27,7 +27,7 @@
         cd "{{ deploy_dir }}"
         bash deploy.sh
       environment:
-        OPENBAO_ADDR: "{{ openbao_addr | default('http://192.168.1.164:8200') }}"
+        OPENBAO_ADDR: "{{ openbao_addr | default('') }}"
       register: result
       changed_when: true
     - name: Show output
@@ -43,7 +43,7 @@
         cd "{{ deploy_dir }}"
         bash deploy.sh
       environment:
-        OPENBAO_ADDR: "{{ openbao_addr | default('http://192.168.1.164:8200') }}"
+        OPENBAO_ADDR: "{{ openbao_addr | default('') }}"
       register: result
       changed_when: true
       ignore_errors: true
@@ -60,7 +60,7 @@
         cd "{{ deploy_dir }}"
         bash deploy.sh
       environment:
-        OPENBAO_ADDR: "{{ openbao_addr | default('http://192.168.1.164:8200') }}"
+        OPENBAO_ADDR: "{{ openbao_addr | default('') }}"
       register: result
       changed_when: true
       ignore_errors: true

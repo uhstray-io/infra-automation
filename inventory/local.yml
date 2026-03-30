@@ -66,9 +66,7 @@ all:
     project_root: "{{ playbook_dir }}/../.."
     openbao_addr: "http://localhost:8200"
 
-    # Proxmox API (used by provisioning playbooks)
-    pve_host: "https://192.168.1.52:8006"
-    pve_token_id: "stray@pve!workflow-agent"
+    # Proxmox API (credentials fetched from OpenBao at runtime)
     target_node: alphacentauri
     vm_storage: vm-lvms
     iso_storage: SharedISOs

@@ -30,7 +30,7 @@
         cd "{{ deploy_dir }}"
         bash deploy.sh
       environment:
-        OPENBAO_ADDR: "{{ openbao_addr | default('http://192.168.1.164:8200') }}"
+        OPENBAO_ADDR: "{{ openbao_addr | default('') }}"
       register: deploy_result
       changed_when: true
 
