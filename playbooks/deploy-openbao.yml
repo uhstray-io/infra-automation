@@ -8,7 +8,7 @@
   gather_facts: false
   vars:
     openbao_repo: "git@github.com:uhstray-io/openbao.git"
-    openbao_deploy_dir: "~/openbao"
+    openbao_deploy_dir: "/home/{{ ansible_user | default('uhstray') }}/openbao"
     openbao_branch: main
 
   tasks:
@@ -31,7 +31,7 @@
         version: "{{ openbao_branch }}"
         force: true
         accept_hostkey: true
-        key_file: "~/.ssh/openbao_deploy_key"
+        key_file: "/home/{{ ansible_user | default('uhstray') }}/.ssh/openbao_deploy_key"
 
     - name: "Run deploy.sh"
       ansible.builtin.shell: |
