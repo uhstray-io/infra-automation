@@ -227,68 +227,68 @@ create_task_templates() {
   ALL_TEMPLATES=$(sem_api GET "/project/${PROJECT_ID}/templates" 2>/dev/null) || ALL_TEMPLATES="[]"
 
   create_template "Deploy All Services" \
-    "semaphore/playbooks/deploy-all.yml"
+    "playbooks/deploy-all.yml"
 
   create_template "Validate All Services" \
-    "semaphore/playbooks/validate-all.yml"
+    "playbooks/validate-all.yml"
 
   create_template "Deploy OpenBao" \
-    "semaphore/playbooks/deploy-service.yml" \
+    "playbooks/deploy-service.yml" \
     "-e target_service=openbao"
 
   create_template "Deploy NocoDB" \
-    "semaphore/playbooks/deploy-service.yml" \
+    "playbooks/deploy-service.yml" \
     "-e target_service=nocodb"
 
   create_template "Deploy n8n" \
-    "semaphore/playbooks/deploy-service.yml" \
+    "playbooks/deploy-service.yml" \
     "-e target_service=n8n"
 
   create_template "Deploy Semaphore" \
-    "semaphore/playbooks/deploy-service.yml" \
+    "playbooks/deploy-service.yml" \
     "-e target_service=semaphore_svc"
 
   create_template "Update NocoDB" \
-    "semaphore/playbooks/update-service.yml" \
+    "playbooks/update-service.yml" \
     "-e target_service=nocodb"
 
   create_template "Update n8n" \
-    "semaphore/playbooks/update-service.yml" \
+    "playbooks/update-service.yml" \
     "-e target_service=n8n"
 
   create_template "Update Semaphore" \
-    "semaphore/playbooks/update-service.yml" \
+    "playbooks/update-service.yml" \
     "-e target_service=semaphore_svc"
 
   # Proxmox provisioning templates
   create_template "Validate Proxmox Cluster" \
-    "semaphore/playbooks/proxmox-validate.yml"
+    "playbooks/proxmox-validate.yml"
 
   create_template "Create VM Template" \
-    "semaphore/playbooks/provision-template.yml"
+    "playbooks/provision-template.yml"
 
   create_template "Provision OpenBao VM" \
-    "semaphore/playbooks/provision-vm.yml" \
+    "playbooks/provision-vm.yml" \
     "-e target_service=openbao"
 
   create_template "Provision NocoDB VM" \
-    "semaphore/playbooks/provision-vm.yml" \
+    "playbooks/provision-vm.yml" \
     "-e target_service=nocodb"
 
   create_template "Provision n8n VM" \
-    "semaphore/playbooks/provision-vm.yml" \
+    "playbooks/provision-vm.yml" \
     "-e target_service=n8n"
 
   create_template "Provision Semaphore VM" \
-    "semaphore/playbooks/provision-vm.yml" \
+    "playbooks/provision-vm.yml" \
     "-e target_service=semaphore"
 
   create_template "Provision NemoClaw VM" \
-    "semaphore/playbooks/provision-vm.yml" \
+    "playbooks/provision-vm.yml" \
     "-e target_service=nemoclaw"
 
   create_template "Provision NetBox VM" \
-    "semaphore/playbooks/provision-vm.yml" \
+    "playbooks/provision-vm.yml" \
     "-e target_service=netbox"
 }
 
