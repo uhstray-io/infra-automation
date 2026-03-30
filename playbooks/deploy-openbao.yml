@@ -26,6 +26,15 @@
       become: true
       become_user: "{{ ansible_user | default('uhstray') }}"
 
+    - name: "Create deploy directory"
+      ansible.builtin.file:
+        path: "{{ openbao_deploy_dir }}"
+        state: directory
+        owner: "{{ ansible_user | default('uhstray') }}"
+        group: "{{ ansible_user | default('uhstray') }}"
+        mode: "0755"
+      become: true
+
     - name: "Clone or update openbao repo"
       ansible.builtin.git:
         repo: "{{ openbao_repo }}"
@@ -34,16 +43,6 @@
         force: true
         accept_hostkey: true
         key_file: "/home/{{ ansible_user | default('uhstray') }}/.ssh/openbao_deploy_key"
-      become: true
-      become_user: "{{ ansible_user | default('uhstray') }}"
-
-    - name: "Set ownership"
-      ansible.builtin.file:
-        path: "{{ openbao_deploy_dir }}"
-        owner: "{{ ansible_user | default('uhstray') }}"
-        group: "{{ ansible_user | default('uhstray') }}"
-        recurse: true
-      become: true
 
     - name: "Ensure deploy.sh is executable"
       ansible.builtin.file:
