@@ -187,15 +187,18 @@
           'status': 'PASS' if (pve_network is succeeded and pve_network.json.data | selectattr('type', 'equalto', 'bridge') | list | length > 0) else 'WARN',
           'detail': (pve_network.json.data | selectattr('type', 'equalto', 'bridge') | map(attribute='iface') | list | join(', ')) if pve_network is succeeded else 'could not query'}] }}
 
-    # ── 8. SSH Key ───────────────────────────────────────────────────────
-    - name: "Check SSH public key"
-      ansible.builtin.stat:
-        path: "{{ ssh_pub_key_path | default('/home/uhstray/.ssh/authorized_keys') }}"
-      register: ssh_key_stat
+    # ── 8. SSH Key (from OpenBao) ────────────────────────────────────────
+    - name: "Check SSH public key in OpenBao"
+      ansible.builtin.set_fact:
+        ssh_key_check: "{{ lookup('community.hashi_vault.hashi_vault',
+          'secret/data/services/ssh:public_key',
+          url=_bao_url, auth_method='approle',
+          role_id=_bao_role_id, secret_id=_bao_secret_id) | default('') }}"
+      ignore_errors: true
 
     - name: "Record SSH key check"
       ansible.builtin.set_fact:
-        validation_results: "{{ validation_results + [{'check': 'SSH Public Key', 'status': 'PASS' if ssh_key_stat.stat.exists else 'FAIL', 'detail': 'found' if ssh_key_stat.stat.exists else 'missing'}] }}"
+        validation_results: "{{ validation_results + [{'check': 'SSH Public Key (OpenBao)', 'status': 'PASS' if (ssh_key_check | length > 0) else 'FAIL', 'detail': 'found in secret/services/ssh' if (ssh_key_check | length > 0) else 'missing from OpenBao'}] }}"
 
     # ── Post-Provision VM Checks (optional) ──────────────────────────────
     - name: "Check provisioned VMs health"
