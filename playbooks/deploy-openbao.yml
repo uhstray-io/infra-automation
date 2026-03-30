@@ -1,14 +1,14 @@
 ---
 # deploy-openbao.yml — Clone uhstray-io/openbao repo and run deploy.sh
-# Run via Semaphore "Deploy OpenBao" template or:
-#   ansible-playbook -i inventory/production.yml playbooks/deploy-openbao.yml
+# Fully rootless: clones to ~/openbao, runs podman as uhstray user.
+# Only 'apt install git' requires become.
 
 - name: "Deploy OpenBao"
   hosts: openbao
   gather_facts: false
   vars:
     openbao_repo: "git@github.com:uhstray-io/openbao.git"
-    openbao_deploy_dir: /opt/openbao
+    openbao_deploy_dir: "~/openbao"
     openbao_branch: main
 
   tasks:
@@ -23,17 +23,6 @@
         name: github.com
         key: "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
         state: present
-      become: true
-      become_user: "{{ ansible_user | default('uhstray') }}"
-
-    - name: "Create deploy directory"
-      ansible.builtin.file:
-        path: "{{ openbao_deploy_dir }}"
-        state: directory
-        owner: "{{ ansible_user | default('uhstray') }}"
-        group: "{{ ansible_user | default('uhstray') }}"
-        mode: "0755"
-      become: true
 
     - name: "Clone or update openbao repo"
       ansible.builtin.git:
@@ -42,16 +31,11 @@
         version: "{{ openbao_branch }}"
         force: true
         accept_hostkey: true
-        key_file: "/home/{{ ansible_user | default('uhstray') }}/.ssh/openbao_deploy_key"
-
-    - name: "Ensure deploy.sh is executable"
-      ansible.builtin.file:
-        path: "{{ openbao_deploy_dir }}/deploy.sh"
-        mode: "0755"
+        key_file: "~/.ssh/openbao_deploy_key"
 
     - name: "Run deploy.sh"
       ansible.builtin.shell: |
-        cd "{{ openbao_deploy_dir }}"
+        cd {{ openbao_deploy_dir }}
         bash deploy.sh
       register: deploy_result
       changed_when: true
@@ -74,6 +58,5 @@
       ansible.builtin.debug:
         msg: |
           OpenBao at {{ ansible_host }}:8200
-          Status: {{ health.status }}
           Initialized: {{ health.json.initialized | default('unknown') }}
           Sealed: {{ health.json.sealed | default('unknown') }}

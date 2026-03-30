@@ -7,7 +7,7 @@ all:
         192.168.1.164:
           service_name: openbao
           service_url: "http://192.168.1.164:8200"
-          deploy_dir: /opt/openbao
+          deploy_dir: ~/openbao
 
     nocodb:
       hosts:
