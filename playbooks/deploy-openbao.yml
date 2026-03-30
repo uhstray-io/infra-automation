@@ -18,13 +18,24 @@
         state: present
       become: true
 
+    - name: "Add GitHub to known hosts"
+      ansible.builtin.known_hosts:
+        name: github.com
+        key: "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+        state: present
+      become: true
+      become_user: "{{ ansible_user | default('uhstray') }}"
+
     - name: "Clone or update openbao repo"
       ansible.builtin.git:
         repo: "{{ openbao_repo }}"
         dest: "{{ openbao_deploy_dir }}"
         version: "{{ openbao_branch }}"
         force: true
+        accept_hostkey: true
+        key_file: "/home/{{ ansible_user | default('uhstray') }}/.ssh/openbao_deploy_key"
       become: true
+      become_user: "{{ ansible_user | default('uhstray') }}"
 
     - name: "Set ownership"
       ansible.builtin.file:
