@@ -1,0 +1,61 @@
+---
+# Production inventory — each service on its own Proxmox VM
+all:
+  children:
+    openbao:
+      hosts:
+        192.168.1.164:
+          service_name: openbao
+          service_url: "http://192.168.1.164:8200"
+          deploy_dir: /opt/openbao
+
+    nocodb:
+      hosts:
+        192.168.1.161:
+          service_name: nocodb
+          service_url: "http://192.168.1.161:8181"
+          deploy_dir: /opt/workflow-agents/vms/nocodb
+          openbao_addr: "http://192.168.1.164:8200"
+
+    n8n:
+      hosts:
+        192.168.1.118:
+          service_name: n8n
+          service_url: "http://192.168.1.118:5678"
+          deploy_dir: /opt/workflow-agents/vms/n8n
+          openbao_addr: "http://192.168.1.164:8200"
+
+    semaphore_svc:
+      hosts:
+        192.168.1.117:
+          service_name: semaphore
+          service_url: "http://192.168.1.117:3000"
+          deploy_dir: /opt/workflow-agents/vms/semaphore
+          openbao_addr: "http://192.168.1.164:8200"
+
+    netbox:
+      hosts:
+        192.168.1.116:
+          service_name: netbox
+          service_url: "http://192.168.1.116:8000"
+          deploy_dir: /opt/netbox
+
+    nemoclaw:
+      hosts:
+        192.168.1.163:
+          service_name: nemoclaw
+          deploy_dir: /opt/nemoclaw
+
+  vars:
+    ansible_user: uhstray
+    ansible_become: true
+    project_root: /opt/workflow-agents
+    openbao_addr: "http://192.168.1.164:8200"
+
+    # Proxmox API (used by provisioning playbooks)
+    pve_host: "https://192.168.1.52:8006"
+    pve_token_id: "stray@pve!workflow-agent"
+    target_node: alphacentauri
+    vm_storage: vm-lvms
+    iso_storage: SharedISOs
+    template_vmid: 9000

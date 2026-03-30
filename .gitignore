@@ -1,0 +1,10 @@
+# No secrets in this public repo
+secrets/
+*.env
+
+# Generated artifacts
+proxmox/cloud-init/autoinstall-seed.iso
+
+# macOS
+.DS_Store
+._*

@@ -1,0 +1,39 @@
+---
+# deploy-service.yml — Deploy a single service using its deploy.sh
+# Usage: ansible-playbook deploy-service.yml -e "target_service=openbao"
+# Semaphore task template should set target_service as an extra variable.
+- name: "Deploy {{ target_service }}"
+  hosts: "{{ target_service }}"
+  gather_facts: false
+  vars:
+    target_service: ""  # Must be provided via -e or Semaphore extra vars
+
+  tasks:
+    - name: Validate target_service is set
+      ansible.builtin.assert:
+        that:
+          - target_service | length > 0
+        fail_msg: "target_service must be set (e.g., -e target_service=openbao)"
+
+    - name: Check deploy script exists
+      ansible.builtin.stat:
+        path: "{{ deploy_dir }}/deploy.sh"
+      register: deploy_script
+
+    - name: Fail if deploy script missing
+      ansible.builtin.fail:
+        msg: "deploy.sh not found at {{ deploy_dir }}/deploy.sh"
+      when: not deploy_script.stat.exists
+
+    - name: Run deploy.sh
+      ansible.builtin.shell: |
+        cd "{{ deploy_dir }}"
+        bash deploy.sh
+      environment:
+        OPENBAO_ADDR: "{{ openbao_addr | default('http://192.168.1.164:8200') }}"
+      register: deploy_result
+      changed_when: true
+
+    - name: Show deploy output
+      ansible.builtin.debug:
+        var: deploy_result.stdout_lines

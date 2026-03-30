@@ -1,0 +1,75 @@
+---
+# Local development inventory — all services on localhost via podman
+# Each service gets a unique alias to prevent Ansible variable merging.
+all:
+  children:
+    openbao:
+      hosts:
+        openbao-local:
+          ansible_host: localhost
+          ansible_connection: local
+          ansible_python_interpreter: "{{ ansible_playbook_python }}"
+          service_name: openbao
+          service_url: "http://localhost:8200"
+          deploy_dir: "{{ project_root }}/vms/openbao"
+
+    nocodb:
+      hosts:
+        nocodb-local:
+          ansible_host: localhost
+          ansible_connection: local
+          ansible_python_interpreter: "{{ ansible_playbook_python }}"
+          service_name: nocodb
+          service_url: "http://localhost:8181"
+          deploy_dir: "{{ project_root }}/vms/nocodb"
+
+    n8n:
+      hosts:
+        n8n-local:
+          ansible_host: localhost
+          ansible_connection: local
+          ansible_python_interpreter: "{{ ansible_playbook_python }}"
+          service_name: n8n
+          service_url: "http://localhost:5678"
+          deploy_dir: "{{ project_root }}/vms/n8n"
+
+    semaphore_svc:
+      hosts:
+        semaphore-local:
+          ansible_host: localhost
+          ansible_connection: local
+          ansible_python_interpreter: "{{ ansible_playbook_python }}"
+          service_name: semaphore
+          service_url: "http://localhost:{{ semaphore_port | default('3000') }}"
+          deploy_dir: "{{ project_root }}/vms/semaphore"
+
+    netbox:
+      hosts:
+        netbox-local:
+          ansible_host: localhost
+          ansible_connection: local
+          ansible_python_interpreter: "{{ ansible_playbook_python }}"
+          service_name: netbox
+          service_url: "http://localhost:8000"
+          deploy_dir: "{{ project_root }}/vms/netbox"
+
+    nemoclaw:
+      hosts:
+        nemoclaw-local:
+          ansible_host: localhost
+          ansible_connection: local
+          ansible_python_interpreter: "{{ ansible_playbook_python }}"
+          service_name: nemoclaw
+          deploy_dir: "{{ project_root }}/vms/nemoclaw"
+
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
+    openbao_addr: "http://localhost:8200"
+
+    # Proxmox API (used by provisioning playbooks)
+    pve_host: "https://192.168.1.52:8006"
+    pve_token_id: "stray@pve!workflow-agent"
+    target_node: alphacentauri
+    vm_storage: vm-lvms
+    iso_storage: SharedISOs
+    template_vmid: 9000

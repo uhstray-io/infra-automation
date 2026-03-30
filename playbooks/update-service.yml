@@ -1,0 +1,74 @@
+---
+# update-service.yml — Update a service to the latest container image version
+# Usage: ansible-playbook update-service.yml -e "target_service=nocodb"
+# Pulls latest images, restarts compose, then validates health.
+- name: "Update {{ target_service }}"
+  hosts: "{{ target_service }}"
+  gather_facts: false
+  vars:
+    target_service: ""
+
+  tasks:
+    - name: Validate target_service is set
+      ansible.builtin.assert:
+        that:
+          - target_service | length > 0
+        fail_msg: "target_service must be set (e.g., -e target_service=nocodb)"
+
+    - name: Check compose.yml exists
+      ansible.builtin.stat:
+        path: "{{ deploy_dir }}/compose.yml"
+      register: compose_file
+
+    - name: Skip non-compose services
+      ansible.builtin.debug:
+        msg: "{{ service_name }} has no compose.yml — update via its deploy.sh"
+      when: not compose_file.stat.exists
+
+    - name: Detect container runtime
+      ansible.builtin.shell: |
+        if command -v podman &>/dev/null; then
+          echo podman
+        elif command -v docker &>/dev/null; then
+          echo docker
+        else
+          echo none
+        fi
+      register: runtime
+      changed_when: false
+      when: compose_file.stat.exists
+
+    - name: Pull latest images
+      ansible.builtin.shell: |
+        cd "{{ deploy_dir }}"
+        {{ runtime.stdout }} compose -f compose.yml pull
+      register: pull_result
+      changed_when: "'Pull complete' in pull_result.stdout or 'Downloaded' in pull_result.stdout"
+      when: compose_file.stat.exists
+
+    - name: Restart with new images
+      ansible.builtin.shell: |
+        cd "{{ deploy_dir }}"
+        {{ runtime.stdout }} compose -f compose.yml up -d
+      register: restart_result
+      changed_when: true
+      when: compose_file.stat.exists
+
+    - name: Wait for service health
+      ansible.builtin.uri:
+        url: "{{ service_url }}"
+        method: GET
+        status_code: [200]
+        timeout: 10
+      register: health
+      retries: 30
+      delay: 4
+      until: health is succeeded
+      when:
+        - compose_file.stat.exists
+        - service_url is defined
+
+    - name: Report update status
+      ansible.builtin.debug:
+        msg: "{{ service_name }}: Updated and {{ 'healthy' if health is succeeded else 'pending' }}"
+      when: compose_file.stat.exists

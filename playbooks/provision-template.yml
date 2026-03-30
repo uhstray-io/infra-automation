@@ -1,0 +1,190 @@
+---
+# provision-template.yml — Create a reusable Ubuntu 24.04 VM template on Proxmox
+# Run via Semaphore or:
+#   ansible-playbook -i inventory/local.yml playbooks/provision-template.yml
+
+- name: "Pre-validate: Cluster ready for template creation"
+  ansible.builtin.import_playbook: proxmox-validate.yml
+
+- name: "Create Ubuntu 24.04 VM Template"
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  module_defaults:
+    ansible.builtin.uri:
+      validate_certs: false
+      headers:
+        Authorization: "PVEAPIToken={{ _pve_token_id }}={{ _pve_secret }}"
+  vars:
+    _project_root: "{{ project_root | default(playbook_dir + '/..') }}"
+    _pve_host: "{{ pve_host | default('https://192.168.1.52:8006') }}"
+    _pve_token_id: "{{ pve_token_id | default('stray@pve!workflow-agent') }}"
+    _pve_secret: "{{ pve_token_secret | default(lookup('env', 'PVE_TOKEN_SECRET')) }}"
+    _node: "{{ target_node | default('alphacentauri') }}"
+    _vmid: "{{ template_vmid | default(9000) }}"
+    _name: "ubuntu-2404-template"
+    _storage: "{{ vm_storage | default('vm-lvms') }}"
+    _ubuntu_iso: "{{ ubuntu_iso | default('SharedISOs:iso/ubuntu-24.04.3-live-server-amd64.iso') }}"
+    _disk: "{{ disk_size | default('20G') }}"
+    _cores: "{{ cores | default(2) }}"
+    _mem: "{{ memory | default(2048) }}"
+    _seed_path: "{{ _project_root }}/proxmox/cloud-init/autoinstall-seed.iso"
+    _seed_volid: "local:iso/autoinstall-seed.iso"
+    _ssh_pub: "{{ ssh_public_key | default(lookup('env', 'SSH_PUBLIC_KEY')) }}"
+
+  tasks:
+    - name: "Check if template VM already exists"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _node }}/qemu/{{ _vmid }}/config"
+        method: GET
+      register: existing_tmpl
+      ignore_errors: true
+
+    - name: "Skip if template already exists"
+      ansible.builtin.meta: end_play
+      when: existing_tmpl is succeeded and (existing_tmpl.json.data.template | default(0) | int == 1)
+
+    - name: "Fail if VMID taken by non-template"
+      ansible.builtin.fail:
+        msg: "VMID {{ _vmid }} exists but is not a template."
+      when: existing_tmpl is succeeded and (existing_tmpl.json.data.template | default(0) | int != 1)
+
+    - name: "Build autoinstall seed ISO"
+      ansible.builtin.command:
+        cmd: "bash {{ _project_root }}/proxmox/cloud-init/build-seed-iso.sh {{ _seed_path }}"
+        creates: "{{ _seed_path }}"
+      register: seed_build
+
+    - name: "Show seed ISO build output"
+      ansible.builtin.debug:
+        var: seed_build.stdout_lines
+      when: seed_build is changed
+
+    - name: "Check if seed ISO already uploaded"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _node }}/storage/local/content"
+        method: GET
+      register: local_content
+
+    - name: "Upload seed ISO via uri module"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _node }}/storage/local/upload"
+        method: POST
+        body_format: form-multipart
+        body:
+          content:
+            content: "iso"
+          filename:
+            content: "{{ lookup('file', _seed_path) }}"
+            filename: "autoinstall-seed.iso"
+            mime_type: "application/octet-stream"
+      register: upload_result
+      when: local_content.json.data | selectattr('volid', 'equalto', _seed_volid) | list | length == 0
+      # Fallback: if form-multipart doesn't work with Proxmox, use curl
+      ignore_errors: true
+
+    - name: "Upload seed ISO via curl (fallback)"
+      ansible.builtin.command:
+        cmd: >
+          curl -s -k -X POST
+          "{{ _pve_host }}/api2/json/nodes/{{ _node }}/storage/local/upload"
+          -H "Authorization: PVEAPIToken={{ _pve_token_id }}={{ _pve_secret }}"
+          -F "content=iso"
+          -F "filename=@{{ _seed_path }}"
+      register: upload_fallback
+      when: upload_result is defined and upload_result is failed
+      changed_when: true
+      no_log: true
+
+    - name: "Create template VM"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _node }}/qemu"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          vmid: "{{ _vmid }}"
+          name: "{{ _name }}"
+          ostype: "l26"
+          cores: "{{ _cores }}"
+          memory: "{{ _mem }}"
+          scsihw: "virtio-scsi-pci"
+          scsi0: "{{ _storage }}:{{ _disk | regex_replace('G', '') }}"
+          ide0: "{{ _ubuntu_iso }},media=cdrom"
+          ide1: "{{ _seed_volid }},media=cdrom"
+          net0: "virtio,bridge=vmbr0,firewall=0"
+          boot: "order=ide0;scsi0"
+          agent: "1"
+          serial0: "socket"
+          vga: "serial0"
+        status_code: [200]
+      register: create_result
+
+    - name: "Wait for VM creation task"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _node }}/tasks/{{ create_result.json.data }}/status"
+        method: GET
+      register: task_status
+      until: task_status.json.data.status == "stopped"
+      retries: 30
+      delay: 5
+      when: create_result.json.data is defined and create_result.json.data is string
+
+    - name: "Start VM for autoinstall"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _node }}/qemu/{{ _vmid }}/status/start"
+        method: POST
+        status_code: [200]
+
+    - name: "Autoinstall in progress"
+      ansible.builtin.debug:
+        msg: "VM {{ _vmid }} started on {{ _node }}. Autoinstall running (5-15 min)..."
+
+    - name: "Wait for VM to be running"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _node }}/qemu/{{ _vmid }}/status/current"
+        method: GET
+      register: vm_status
+      until: vm_status.json.data.status == "running"
+      retries: 12
+      delay: 10
+
+    - name: "Wait for autoinstall to complete (VM stops when done)"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _node }}/qemu/{{ _vmid }}/status/current"
+        method: GET
+      register: vm_status
+      until: vm_status.json.data.status == "stopped"
+      retries: 60
+      delay: 15
+
+    - name: "Post-install: remove CDs, add cloud-init, set defaults"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _node }}/qemu/{{ _vmid }}/config"
+        method: PUT
+        body_format: form-urlencoded
+        body:
+          ide0: "none,media=cdrom"
+          ide1: "none,media=cdrom"
+          ide2: "{{ _storage }}:cloudinit"
+          boot: "order=scsi0"
+          ciuser: "uhstray"
+          sshkeys: "{{ _ssh_pub | urlencode }}"
+          ipconfig0: "ip=dhcp"
+          nameserver: "192.168.1.1"
+        status_code: [200]
+
+    - name: "Convert VM to template"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _node }}/qemu/{{ _vmid }}/template"
+        method: POST
+        status_code: [200]
+
+    - name: "Template creation complete"
+      ansible.builtin.debug:
+        msg: |
+          Template {{ _vmid }} ({{ _name }}) created on {{ _node }}.
+          Storage: {{ _storage }}, Disk: {{ _disk }}
+          Cloud-init enabled with user 'uhstray'. Ready for cloning.
+
+- name: "Post-validate: Template exists and is ready"
+  ansible.builtin.import_playbook: proxmox-validate.yml

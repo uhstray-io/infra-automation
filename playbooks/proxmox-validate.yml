@@ -1,0 +1,234 @@
+---
+# proxmox-validate.yml — Pre/post validation for Proxmox cluster state
+# Run via Semaphore or: ansible-playbook -i inventory/local.yml playbooks/proxmox-validate.yml
+#
+# Validates: API, node, storage, ISOs, VM IDs, template, SSH key, VM health
+
+- name: "Proxmox Cluster Validation"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  module_defaults:
+    ansible.builtin.uri:
+      validate_certs: false
+      headers:
+        Authorization: "PVEAPIToken={{ _pve_token_id }}={{ _pve_secret }}"
+  vars:
+    _project_root: "{{ project_root | default(playbook_dir + '/..') }}"
+    _pve_host: "{{ pve_host | default('https://192.168.1.52:8006') }}"
+    _pve_token_id: "{{ pve_token_id | default('stray@pve!workflow-agent') }}"
+    _pve_secret: "{{ pve_token_secret | default(lookup('env', 'PVE_TOKEN_SECRET')) }}"
+    _target_node: "{{ target_node | default('alphacentauri') }}"
+    _vm_storage: "{{ vm_storage | default('vm-lvms') }}"
+    _iso_storage: "{{ iso_storage | default('SharedISOs') }}"
+    _ubuntu_iso: "{{ ubuntu_iso | default('SharedISOs:iso/ubuntu-24.04.3-live-server-amd64.iso') }}"
+    _template_vmid: "{{ template_vmid | default(9000) }}"
+    _vmid_min: "{{ vmid_min | default(200) }}"
+    _vmid_max: "{{ vmid_max | default(299) }}"
+    validation_results: []
+
+  tasks:
+    # ── 1. API Connectivity ──────────────────────────────────────────────
+    - name: "Check Proxmox API connectivity"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/version"
+        method: GET
+        status_code: 200
+      register: pve_version
+      ignore_errors: true
+
+    - name: "Record API check"
+      ansible.builtin.set_fact:
+        validation_results: "{{ validation_results + [{'check': 'API Connectivity', 'status': 'PASS' if pve_version is succeeded else 'FAIL', 'detail': 'PVE ' + (pve_version.json.data.version | default('unknown')) if pve_version is succeeded else 'Cannot reach ' + pve_host}] }}"
+
+    - name: "Abort if API unreachable"
+      ansible.builtin.fail:
+        msg: "Cannot reach Proxmox API at {{ pve_host }}"
+      when: pve_version is failed
+
+    # ── 2. Target Node ───────────────────────────────────────────────────
+    - name: "Get cluster nodes"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes"
+        method: GET
+
+
+      register: pve_nodes
+
+    - name: "Check target node status"
+      ansible.builtin.set_fact:
+        node_status: "{{ pve_nodes.json.data | selectattr('node', 'equalto', _target_node) | map(attribute='status') | first | default('not_found') }}"
+
+    - name: "Record node check"
+      ansible.builtin.set_fact:
+        validation_results: "{{ validation_results + [{'check': 'Target Node (' + _target_node + ')', 'status': 'PASS' if node_status == 'online' else 'FAIL', 'detail': node_status}] }}"
+
+    - name: "List all cluster nodes"
+      ansible.builtin.debug:
+        msg: "Cluster: {{ pve_nodes.json.data | map(attribute='node') | list | join(', ') }}"
+
+    # ── 3. Storage ───────────────────────────────────────────────────────
+    - name: "Get storage on target node"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _target_node }}/storage"
+        method: GET
+
+
+      register: pve_storage
+
+    - name: "Check VM storage"
+      ansible.builtin.set_fact:
+        vm_stor: "{{ pve_storage.json.data | selectattr('storage', 'equalto', _vm_storage) | first | default({}) }}"
+
+    - name: "Record VM storage check"
+      ansible.builtin.set_fact:
+        validation_results: "{{ validation_results + [{'check': 'VM Storage (' + _vm_storage + ')', 'status': 'PASS' if (vm_stor.active | default(0) | int == 1 and 'images' in (vm_stor.content | default(''))) else 'FAIL', 'detail': ((vm_stor.avail | default(0) | int / 1073741824) | round(0) | int | string) + 'GB available' if vm_stor else 'not found'}] }}"
+
+    - name: "Check ISO storage"
+      ansible.builtin.set_fact:
+        iso_stor: "{{ pve_storage.json.data | selectattr('storage', 'equalto', _iso_storage) | first | default({}) }}"
+
+    - name: "Record ISO storage check"
+      ansible.builtin.set_fact:
+        validation_results: "{{ validation_results + [{'check': 'ISO Storage (' + _iso_storage + ')', 'status': 'PASS' if (iso_stor.active | default(0) | int == 1 and 'iso' in (iso_stor.content | default(''))) else 'FAIL', 'detail': 'active' if iso_stor.active | default(0) | int == 1 else 'not found or inactive'}] }}"
+
+    # ── 4. Ubuntu ISO ────────────────────────────────────────────────────
+    - name: "Get ISOs on storage"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _target_node }}/storage/{{ _iso_storage }}/content"
+        method: GET
+
+
+      register: pve_isos
+
+    - name: "Check Ubuntu ISO exists"
+      ansible.builtin.set_fact:
+        iso_found: "{{ pve_isos.json.data | selectattr('volid', 'equalto', _ubuntu_iso) | list | length > 0 }}"
+
+    - name: "Record ISO check"
+      ansible.builtin.set_fact:
+        validation_results: "{{ validation_results + [{'check': 'Ubuntu ISO', 'status': 'PASS' if iso_found else 'FAIL', 'detail': _ubuntu_iso if iso_found else 'not found: ' + _ubuntu_iso}] }}"
+
+    # ── 5. VM Inventory ──────────────────────────────────────────────────
+    - name: "Get all VMs"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/cluster/resources?type=vm"
+        method: GET
+
+
+      register: pve_vms
+
+    - name: "Find VMs in target range"
+      ansible.builtin.set_fact:
+        range_vms: "{{ pve_vms.json.data | selectattr('vmid', '>=', _vmid_min | int) | selectattr('vmid', '<=', _vmid_max | int) | sort(attribute='vmid') | list }}"
+        all_vmids: "{{ pve_vms.json.data | map(attribute='vmid') | list }}"
+
+    - name: "List VMs in range"
+      ansible.builtin.debug:
+        msg: "{{ item.vmid }}: {{ item.name }} @ {{ item.node }} ({{ item.status }})"
+      loop: "{{ range_vms }}"
+      loop_control:
+        label: "{{ item.vmid }}"
+
+    - name: "Find next available VMID"
+      ansible.builtin.set_fact:
+        next_vmid: "{{ range(_vmid_min | int, _vmid_max | int + 1) | reject('in', all_vmids | map('int') | list) | first | default('none') }}"
+
+    - name: "Record VMID availability"
+      ansible.builtin.set_fact:
+        validation_results: "{{ validation_results + [{'check': 'Next Available VMID', 'status': 'PASS' if next_vmid != 'none' else 'FAIL', 'detail': next_vmid | string + ' (range ' + _vmid_min | string + '-' + _vmid_max | string + ')'}] }}"
+
+    # ── 6. Template Check ────────────────────────────────────────────────
+    - name: "Check if template VMID exists"
+      ansible.builtin.set_fact:
+        tmpl_exists: "{{ _template_vmid | int in (all_vmids | map('int') | list) }}"
+
+    - name: "Check template status"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _target_node }}/qemu/{{ _template_vmid }}/config"
+        method: GET
+
+
+      register: tmpl_config
+      ignore_errors: true
+      when: tmpl_exists | bool
+
+    - name: "Record template check"
+      ansible.builtin.set_fact:
+        validation_results: >-
+          {{ validation_results + [{'check': 'Template VM ' + _template_vmid | string,
+          'status': 'PASS' if (tmpl_exists | bool and tmpl_config is defined and tmpl_config is succeeded and tmpl_config.json.data.template | default(0) | int == 1) else ('WARN' if tmpl_exists | bool else 'INFO'),
+          'detail': 'template ready' if (tmpl_exists | bool and tmpl_config is defined and tmpl_config is succeeded and tmpl_config.json.data.template | default(0) | int == 1) else ('exists but not a template' if tmpl_exists | bool else 'available for creation')}] }}
+
+    # ── 7. Network Bridge ────────────────────────────────────────────────
+    - name: "Get network config"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _target_node }}/network"
+        method: GET
+
+
+      register: pve_network
+      ignore_errors: true
+
+    - name: "Record network check"
+      ansible.builtin.set_fact:
+        validation_results: >-
+          {{ validation_results + [{'check': 'Network Bridges',
+          'status': 'PASS' if (pve_network is succeeded and pve_network.json.data | selectattr('type', 'equalto', 'bridge') | list | length > 0) else 'WARN',
+          'detail': (pve_network.json.data | selectattr('type', 'equalto', 'bridge') | map(attribute='iface') | list | join(', ')) if pve_network is succeeded else 'could not query'}] }}
+
+    # ── 8. SSH Key ───────────────────────────────────────────────────────
+    - name: "Check SSH public key"
+      ansible.builtin.stat:
+        path: "{{ ssh_pub_key_path | default('/home/uhstray/.ssh/authorized_keys') }}"
+      register: ssh_key_stat
+
+    - name: "Record SSH key check"
+      ansible.builtin.set_fact:
+        validation_results: "{{ validation_results + [{'check': 'SSH Public Key', 'status': 'PASS' if ssh_key_stat.stat.exists else 'FAIL', 'detail': 'found' if ssh_key_stat.stat.exists else 'missing'}] }}"
+
+    # ── Post-Provision VM Checks (optional) ──────────────────────────────
+    - name: "Check provisioned VMs health"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ item.node }}/qemu/{{ item.vmid }}/status/current"
+        method: GET
+
+
+      register: vm_health
+      loop: "{{ check_vms | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+      ignore_errors: true
+      when: check_vms is defined and check_vms | length > 0
+
+    - name: "Record VM health checks"
+      ansible.builtin.set_fact:
+        validation_results: >-
+          {{ validation_results + [{'check': 'VM ' + item.item.name + ' (' + item.item.vmid | string + ')',
+          'status': 'PASS' if (item.json is defined and item.json.data.status | default('') == 'running') else 'FAIL',
+          'detail': (item.json.data.status | default('unknown')) if item.json is defined else 'unreachable'}] }}
+      loop: "{{ vm_health.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.name | default('unknown') }}"
+      when: check_vms is defined and check_vms | length > 0 and vm_health is defined
+
+    # ── Summary ──────────────────────────────────────────────────────────
+    - name: "Validation Summary"
+      ansible.builtin.debug:
+        msg: |
+          ==========================================
+          Proxmox Validation Summary
+          ==========================================
+          {% for r in validation_results %}
+          {{ '%-6s' | format(r.status) }} {{ r.check }}: {{ r.detail }}
+          {% endfor %}
+          ==========================================
+          PASS: {{ validation_results | selectattr('status', 'equalto', 'PASS') | list | length }}
+          FAIL: {{ validation_results | selectattr('status', 'equalto', 'FAIL') | list | length }}
+          WARN: {{ validation_results | selectattr('status', 'equalto', 'WARN') | list | length }}
+          INFO: {{ validation_results | selectattr('status', 'equalto', 'INFO') | list | length }}
+
+    - name: "Fail if any checks failed"
+      ansible.builtin.fail:
+        msg: "Validation failed — see above for details"
+      when: validation_results | selectattr('status', 'equalto', 'FAIL') | list | length > 0

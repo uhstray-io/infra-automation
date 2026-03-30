@@ -1,0 +1,69 @@
+---
+# deploy-openbao.yml — Clone uhstray-io/openbao repo and run deploy.sh
+# Run via Semaphore "Deploy OpenBao" template or:
+#   ansible-playbook -i inventory/production.yml playbooks/deploy-openbao.yml
+
+- name: "Deploy OpenBao"
+  hosts: openbao
+  gather_facts: false
+  vars:
+    openbao_repo: "git@github.com:uhstray-io/openbao.git"
+    openbao_deploy_dir: /opt/openbao
+    openbao_branch: main
+
+  tasks:
+    - name: "Install git if needed"
+      ansible.builtin.apt:
+        name: git
+        state: present
+      become: true
+
+    - name: "Clone or update openbao repo"
+      ansible.builtin.git:
+        repo: "{{ openbao_repo }}"
+        dest: "{{ openbao_deploy_dir }}"
+        version: "{{ openbao_branch }}"
+        force: true
+      become: true
+
+    - name: "Set ownership"
+      ansible.builtin.file:
+        path: "{{ openbao_deploy_dir }}"
+        owner: "{{ ansible_user | default('uhstray') }}"
+        group: "{{ ansible_user | default('uhstray') }}"
+        recurse: true
+      become: true
+
+    - name: "Ensure deploy.sh is executable"
+      ansible.builtin.file:
+        path: "{{ openbao_deploy_dir }}/deploy.sh"
+        mode: "0755"
+
+    - name: "Run deploy.sh"
+      ansible.builtin.shell: |
+        cd "{{ openbao_deploy_dir }}"
+        bash deploy.sh
+      register: deploy_result
+      changed_when: true
+
+    - name: "Show deploy output"
+      ansible.builtin.debug:
+        var: deploy_result.stdout_lines
+
+    - name: "Verify OpenBao health"
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:8200/v1/sys/health"
+        method: GET
+        status_code: [200, 429, 472, 473, 501, 503]
+        validate_certs: false
+      register: health
+      retries: 5
+      delay: 5
+
+    - name: "OpenBao status"
+      ansible.builtin.debug:
+        msg: |
+          OpenBao at {{ ansible_host }}:8200
+          Status: {{ health.status }}
+          Initialized: {{ health.json.initialized | default('unknown') }}
+          Sealed: {{ health.json.sealed | default('unknown') }}

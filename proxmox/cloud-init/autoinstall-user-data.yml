@@ -1,0 +1,80 @@
+#cloud-config
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  identity:
+    hostname: ubuntu-template
+    username: uhstray
+    # Locked account — SSH key auth only. Cloud-init overrides on cloned VMs.
+    password: "!"
+  ssh:
+    install-server: true
+    # SSH keys are injected via cloud-init at template post-install and VM clone time
+    allow-pw: false
+  storage:
+    layout:
+      name: lvm
+      sizing-policy: all
+  network:
+    version: 2
+    ethernets:
+      ens18:
+        dhcp4: true
+  packages:
+    - qemu-guest-agent
+    - cloud-init
+    - curl
+    - jq
+    - podman
+    - python3
+    - python3-pip
+    - openssh-server
+    - ca-certificates
+    - gnupg
+    - lsb-release
+    - unzip
+    - htop
+    - tmux
+    - genisoimage
+    - ansible
+  late-commands:
+    - curtin in-target -- systemctl enable qemu-guest-agent
+    - curtin in-target -- systemctl enable cloud-init
+    # Pull Semaphore runner image so it's cached in the template
+    - curtin in-target -- podman pull docker.io/semaphoreui/runner:latest
+    # Create runner systemd service (disabled until configured per-VM)
+    - |
+      cat > /target/etc/systemd/system/semaphore-runner.service <<'UNIT'
+      [Unit]
+      Description=Semaphore Runner
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      Restart=always
+      RestartSec=10
+      EnvironmentFile=-/etc/semaphore/runner.env
+      ExecStartPre=-/usr/bin/podman rm -f semaphore-runner
+      ExecStart=/usr/bin/podman run --rm --name semaphore-runner \
+        -e SEMAPHORE_RUNNER_API_URL=${SEMAPHORE_WEB_ROOT} \
+        -e SEMAPHORE_RUNNER_REGISTRATION_TOKEN=${SEMAPHORE_RUNNER_TOKEN} \
+        -v semaphore_runner_data:/var/lib/semaphore \
+        -v /tmp/semaphore:/tmp/semaphore \
+        docker.io/semaphoreui/runner:latest
+      ExecStop=/usr/bin/podman stop semaphore-runner
+
+      [Install]
+      WantedBy=multi-user.target
+      UNIT
+    - curtin in-target -- mkdir -p /etc/semaphore
+    # Clean state for template cloning
+    - curtin in-target -- cloud-init clean
+    - curtin in-target -- truncate -s 0 /etc/machine-id
+    - curtin in-target -- rm -f /var/lib/dbus/machine-id
+    - curtin in-target -- rm -f /etc/ssh/ssh_host_*
+    - 'sed -i "s/^#*PermitRootLogin.*/PermitRootLogin no/" /target/etc/ssh/sshd_config'
+    - 'echo "uhstray ALL=(ALL) NOPASSWD:ALL" > /target/etc/sudoers.d/uhstray'
+    - 'chmod 440 /target/etc/sudoers.d/uhstray'

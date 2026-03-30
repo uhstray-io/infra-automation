@@ -1,0 +1,260 @@
+---
+# provision-vm.yml — Clone template and provision a new service VM
+# Run via Semaphore or:
+#   ansible-playbook -i inventory/local.yml playbooks/provision-vm.yml -e target_service=openbao
+
+- name: "Pre-validate: Cluster ready for VM provisioning"
+  ansible.builtin.import_playbook: proxmox-validate.yml
+
+- name: "Provision VM from template"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  module_defaults:
+    ansible.builtin.uri:
+      validate_certs: false
+      headers:
+        Authorization: "PVEAPIToken={{ _pve_token_id }}={{ _pve_secret }}"
+  vars:
+    _project_root: "{{ project_root | default(playbook_dir + '/..') }}"
+    _pve_host: "{{ pve_host | default('https://192.168.1.52:8006') }}"
+    _pve_token_id: "{{ pve_token_id | default('stray@pve!workflow-agent') }}"
+    _pve_secret: "{{ pve_token_secret | default(lookup('env', 'PVE_TOKEN_SECRET')) }}"
+    _ssh_pub: "{{ ssh_public_key | default(lookup('env', 'SSH_PUBLIC_KEY')) }}"
+    _tmpl_vmid: "{{ template_vmid | default(9000) }}"
+    _tmpl_node: "{{ template_node | default('alphacentauri') }}"
+
+    # VM specs from file
+    _specs: "{{ lookup('file', _project_root + '/proxmox/vm-specs.yml') | from_yaml }}"
+    _svc: "{{ _specs.vms[target_service] }}"
+    _defaults: "{{ _specs.defaults }}"
+
+    # Resolved VM config
+    _vmid: "{{ target_vmid | default(_svc.vmid) }}"
+    _name: "{{ _svc.name }}"
+    _node: "{{ target_node | default(_svc.node) }}"
+    _cores: "{{ _svc.cores }}"
+    _mem: "{{ _svc.memory }}"
+    _disk: "{{ _svc.disk }}"
+    _ip: "{{ _svc.ip }}"
+    _gw: "{{ _svc.gateway | default(_defaults.gateway) }}"
+    _dns: "{{ _svc.nameserver | default(_defaults.nameserver) }}"
+    _storage: "{{ _defaults.disk_storage }}"
+    _bridge: "{{ _defaults.net_bridge }}"
+    _netmask: "{{ _defaults.netmask }}"
+    _tags: "{{ _svc.tags | default(_defaults.base_tags | default('ubuntu;24.04')) }}"
+
+    # Semaphore runner config (injected on each VM for task execution)
+    _semaphore_url: "{{ semaphore_url | default('http://192.168.1.117:3000') }}"
+    _runner_token: "{{ runner_token | default(lookup('env', 'SEMAPHORE_RUNNER_TOKEN') | default('')) }}"
+
+  tasks:
+    - name: "Validate target_service is provided"
+      ansible.builtin.fail:
+        msg: "target_service must be specified (e.g., -e target_service=openbao)"
+      when: target_service is not defined
+
+    - name: "Show provisioning plan"
+      ansible.builtin.debug:
+        msg: |
+          Provisioning {{ target_service }}:
+            VMID: {{ _vmid }}, Name: {{ _name }}, Node: {{ _node }}
+            CPU: {{ _cores }} cores, Memory: {{ _mem }}MB, Disk: {{ _disk }}
+            IP: {{ _ip }}/{{ _netmask }}, GW: {{ _gw }}, DNS: {{ _dns }}
+
+    - name: "Verify template exists"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _tmpl_node }}/qemu/{{ _tmpl_vmid }}/config"
+        method: GET
+      register: tmpl_check
+      ignore_errors: true
+
+    - name: "Fail if template not found"
+      ansible.builtin.fail:
+        msg: "Template VM {{ _tmpl_vmid }} not found. Run provision-template.yml first."
+      when: tmpl_check is failed or (tmpl_check.json.data.template | default(0) | int != 1)
+
+    - name: "Check if VMID already in use"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/cluster/resources?type=vm"
+        method: GET
+      register: all_vms
+
+    - name: "Check for existing VM"
+      ansible.builtin.set_fact:
+        vm_exists: "{{ all_vms.json.data | selectattr('vmid', 'equalto', _vmid | int) | list | length > 0 }}"
+
+    - name: "Skip clone if VM already exists"
+      ansible.builtin.debug:
+        msg: "VM {{ _vmid }} ({{ _name }}) already exists — skipping clone."
+      when: vm_exists | bool
+
+    # ── Clone template ────────────────────────────────────────────────────
+    - name: "Clone template to new VM"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _tmpl_node }}/qemu/{{ _tmpl_vmid }}/clone"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          newid: "{{ _vmid }}"
+          name: "{{ _name }}"
+          target: "{{ _node }}"
+          full: "1"
+          storage: "{{ _storage }}"
+        status_code: [200]
+      register: clone_result
+      when: not (vm_exists | bool)
+
+    - name: "Wait for clone task"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _tmpl_node }}/tasks/{{ clone_result.json.data }}/status"
+        method: GET
+      register: clone_task
+      until: clone_task.json.data.status == "stopped"
+      retries: 60
+      delay: 10
+      when: clone_result is changed and clone_result.json.data is defined
+
+    - name: "Verify clone succeeded"
+      ansible.builtin.fail:
+        msg: "Clone failed: {{ clone_task.json.data.exitstatus | default('unknown') }}"
+      when: clone_result is changed and clone_task is defined and clone_task.json.data.exitstatus | default('OK') != 'OK'
+
+    # ── Configure VM (single PUT with all settings) ───────────────────────
+    - name: "Configure VM resources and cloud-init"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _node }}/qemu/{{ _vmid }}/config"
+        method: PUT
+        body_format: form-urlencoded
+        body:
+          cores: "{{ _cores }}"
+          memory: "{{ _mem }}"
+          agent: "1"
+          net0: "virtio,bridge={{ _bridge }},firewall=0"
+          ciuser: "uhstray"
+          sshkeys: "{{ _ssh_pub | urlencode }}"
+          ipconfig0: "ip={{ _ip }}/{{ _netmask }},gw={{ _gw }}"
+          nameserver: "{{ _dns }}"
+        status_code: [200]
+
+    - name: "Set Proxmox tags"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _node }}/qemu/{{ _vmid }}/config"
+        method: PUT
+        body_format: form-urlencoded
+        body:
+          tags: "{{ _tags }}"
+        status_code: [200]
+
+    - name: "Resize disk to {{ _disk }}"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _node }}/qemu/{{ _vmid }}/resize"
+        method: PUT
+        body_format: form-urlencoded
+        body:
+          disk: "scsi0"
+          size: "{{ _disk }}"
+        status_code: [200]
+      register: resize_result
+      ignore_errors: true
+
+    - name: "Warn if disk resize failed"
+      ansible.builtin.debug:
+        msg: "Disk resize to {{ _disk }} failed (may already be correct size): {{ resize_result.msg | default('unknown') }}"
+      when: resize_result is failed
+
+    # ── Start VM ──────────────────────────────────────────────────────────
+    - name: "Check VM status"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _node }}/qemu/{{ _vmid }}/status/current"
+        method: GET
+      register: pre_start
+
+    - name: "Start VM"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _node }}/qemu/{{ _vmid }}/status/start"
+        method: POST
+        status_code: [200]
+      when: pre_start.json.data.status != "running"
+
+    - name: "Wait for VM running"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _node }}/qemu/{{ _vmid }}/status/current"
+        method: GET
+      register: vm_running
+      until: vm_running.json.data.status == "running"
+      retries: 30
+      delay: 5
+
+    - name: "Wait for QEMU guest agent"
+      ansible.builtin.uri:
+        url: "{{ _pve_host }}/api2/json/nodes/{{ _node }}/qemu/{{ _vmid }}/agent/ping"
+        method: POST
+        status_code: [200, 500]
+      register: agent_ping
+      until: agent_ping.status == 200
+      retries: 60
+      delay: 10
+      ignore_errors: true
+
+    - name: "Wait for SSH"
+      ansible.builtin.wait_for:
+        host: "{{ _ip }}"
+        port: 22
+        timeout: 300
+        state: started
+      register: ssh_ready
+
+    # ── Post-provision validation ─────────────────────────────────────────
+    - name: "Verify SSH connectivity"
+      ansible.builtin.command:
+        cmd: >
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+          -i "{{ ssh_private_key_path | default('/home/uhstray/.ssh/uhstray_ed25519') }}"
+          uhstray@{{ _ip }} "hostname && uname -a && cloud-init status"
+      register: ssh_test
+      retries: 3
+      delay: 15
+      until: ssh_test.rc == 0
+      ignore_errors: true
+
+    - name: "Show SSH test output"
+      ansible.builtin.debug:
+        var: ssh_test.stdout_lines
+      when: ssh_test is succeeded
+
+    # ── Configure Semaphore runner ────────────────────────────────────────
+    - name: "Configure Semaphore runner"
+      ansible.builtin.command:
+        cmd: >
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+          -i "{{ ssh_private_key_path | default('/home/uhstray/.ssh/uhstray_ed25519') }}"
+          uhstray@{{ _ip }}
+          "sudo tee /etc/semaphore/runner.env > /dev/null <<'ENVFILE'
+          SEMAPHORE_WEB_ROOT={{ _semaphore_url }}
+          SEMAPHORE_RUNNER_TOKEN={{ _runner_token }}
+          ENVFILE
+          sudo chmod 600 /etc/semaphore/runner.env
+          sudo systemctl enable --now semaphore-runner"
+      register: runner_setup
+      ignore_errors: true
+      when: ssh_test is succeeded and _runner_token | length > 0
+
+    - name: "Show runner setup output"
+      ansible.builtin.debug:
+        var: runner_setup.stdout_lines
+      when: runner_setup is defined and runner_setup is succeeded
+
+    - name: "Provisioning complete"
+      ansible.builtin.debug:
+        msg: |
+          VM {{ _vmid }} ({{ _name }}) provisioned on {{ _node }}:
+            IP: {{ _ip }}, SSH: uhstray@{{ _ip }}
+            Status: {{ 'running' if vm_running.json.data.status == 'running' else 'check' }}
+            Agent: {{ 'ok' if (agent_ping is defined and agent_ping.status == 200) else 'pending' }}
+            SSH: {{ 'ok' if ssh_ready is succeeded else 'pending' }}
+            Runner: {{ 'configured' if (runner_setup is defined and runner_setup is succeeded) else 'skipped' }}
+          Next: deploy-service.yml -e target_service={{ target_service }}
+
+- name: "Post-validate: VM running"
+  ansible.builtin.import_playbook: proxmox-validate.yml

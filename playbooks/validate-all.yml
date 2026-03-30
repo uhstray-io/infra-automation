@@ -1,0 +1,97 @@
+---
+# validate-all.yml — Validate all deployed services are healthy
+# Run after deploy-all.yml or independently for health checks.
+
+- name: "Validate OpenBao"
+  hosts: openbao
+  gather_facts: false
+  tasks:
+    - name: Check OpenBao health
+      ansible.builtin.uri:
+        url: "{{ service_url }}/v1/sys/health"
+        method: GET
+        status_code: [200]
+        timeout: 10
+      register: bao_health
+      ignore_errors: true
+
+    - name: Report OpenBao status
+      ansible.builtin.debug:
+        msg: "OpenBao: {{ 'HEALTHY' if bao_health is succeeded else 'UNHEALTHY' }}"
+
+- name: "Validate NocoDB"
+  hosts: nocodb
+  gather_facts: false
+  tasks:
+    - name: Check NocoDB health
+      ansible.builtin.uri:
+        url: "{{ service_url }}/api/v1/health"
+        method: GET
+        status_code: [200]
+        timeout: 10
+      register: nocodb_health
+      ignore_errors: true
+
+    - name: Report NocoDB status
+      ansible.builtin.debug:
+        msg: "NocoDB: {{ 'HEALTHY' if nocodb_health is succeeded else 'UNHEALTHY' }}"
+
+- name: "Validate n8n"
+  hosts: n8n
+  gather_facts: false
+  tasks:
+    - name: Check n8n health
+      ansible.builtin.uri:
+        url: "{{ service_url }}/healthz"
+        method: GET
+        status_code: [200]
+        timeout: 10
+      register: n8n_health
+      ignore_errors: true
+
+    - name: Report n8n status
+      ansible.builtin.debug:
+        msg: "n8n: {{ 'HEALTHY' if n8n_health is succeeded else 'UNHEALTHY' }}"
+
+- name: "Validate Semaphore"
+  hosts: semaphore_svc
+  gather_facts: false
+  tasks:
+    - name: Check Semaphore health
+      ansible.builtin.uri:
+        url: "{{ service_url }}/api/ping"
+        method: GET
+        status_code: [200]
+        timeout: 10
+      register: semaphore_health
+      ignore_errors: true
+
+    - name: Report Semaphore status
+      ansible.builtin.debug:
+        msg: "Semaphore: {{ 'HEALTHY' if semaphore_health is succeeded else 'UNHEALTHY' }}"
+
+- name: "Validate NetBox"
+  hosts: netbox
+  gather_facts: false
+  tasks:
+    - name: Check NetBox health
+      ansible.builtin.uri:
+        url: "{{ service_url }}/login/"
+        method: GET
+        status_code: [200]
+        timeout: 10
+      register: netbox_health
+      ignore_errors: true
+
+    - name: Report NetBox status
+      ansible.builtin.debug:
+        msg: "NetBox: {{ 'HEALTHY' if netbox_health is succeeded else 'UNHEALTHY' }}"
+
+- name: "Summary"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Print validation summary
+      ansible.builtin.debug:
+        msg: "Validation complete — check individual service results above."
