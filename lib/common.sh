@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# common.sh — Shared library for workflow-agents deploy scripts
+# common.sh — Shared library for agent-cloud deploy scripts
 # Source guard: safe to source multiple times
 [ -n "${_WA_COMMON_SH_LOADED:-}" ] && return 0
 _WA_COMMON_SH_LOADED=1

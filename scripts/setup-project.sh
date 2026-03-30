@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # setup-project.sh — Programmatically create Semaphore project, inventory,
-# repositories, and task templates for workflow-agents deployment.
+# repositories, and task templates for agent-cloud deployment.
 # Run AFTER Semaphore is deployed and API token is available.
 # Idempotent: checks for existing resources before creating.
 set -euo pipefail
@@ -62,7 +62,7 @@ create_project() {
   local projects
   projects=$(sem_api GET "/projects" 2>/dev/null) || projects="[]"
   local existing
-  existing=$(echo "$projects" | jq -r '.[] | select(.name == "workflow-agents") | .id' 2>/dev/null) || existing=""
+  existing=$(echo "$projects" | jq -r '.[] | select(.name == "agent-cloud") | .id' 2>/dev/null) || existing=""
 
   if [ -n "$existing" ]; then
     PROJECT_ID="$existing"
@@ -72,7 +72,7 @@ create_project() {
 
   local response
   response=$(sem_api POST "/projects" -d '{
-    "name": "workflow-agents",
+    "name": "agent-cloud",
     "alert": false
   }')
 
@@ -140,11 +140,11 @@ create_repository() {
   existing=$(sem_api GET "/project/${PROJECT_ID}/repositories" 2>/dev/null) || existing="[]"
 
   local repo_id
-  repo_id=$(echo "$existing" | jq -r '.[] | select(.name == "workflow-agents-local") | .id' 2>/dev/null) || repo_id=""
+  repo_id=$(echo "$existing" | jq -r '.[] | select(.name == "agent-cloud-local") | .id' 2>/dev/null) || repo_id=""
   if [ -z "$repo_id" ]; then
     local resp
     resp=$(sem_api POST "/project/${PROJECT_ID}/repositories" -d "$(jq -n \
-      --arg name "workflow-agents-local" \
+      --arg name "agent-cloud-local" \
       --argjson pid "$PROJECT_ID" \
       --argjson kid "$NONE_KEY_ID" \
       --arg git_url "${PROJECT_ROOT}" \
@@ -308,7 +308,7 @@ main() {
   info ""
   info "=== Semaphore project setup complete ==="
   info "  UI: ${SEMAPHORE_URL}"
-  info "  Project: workflow-agents (id=${PROJECT_ID})"
+  info "  Project: agent-cloud (id=${PROJECT_ID})"
   info "  Templates: Deploy All, Validate All, per-service deploy/update/provision"
 }
 
