@@ -1,0 +1,9 @@
+---
+# deploy-semaphore.yml — Thin wrapper for deploy-service.yml
+# NOTE: Semaphore is the deployment orchestrator. This playbook is for
+# provisioning Semaphore on a NEW VM only. Do not run this against
+# the live Semaphore instance that is executing your tasks.
+- name: "Deploy Semaphore"
+  import_playbook: deploy-service.yml
+  vars:
+    target_service: semaphore_svc

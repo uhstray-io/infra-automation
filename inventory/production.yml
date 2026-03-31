@@ -8,28 +8,37 @@ all:
       hosts:
         "{{ openbao_host }}":
           service_name: openbao
+          service_repo: "git@github.com:uhstray-io/openbao.git"
           service_url: "http://{{ openbao_host }}:8200"
+          health_path: "/v1/sys/health"
+          health_status_codes: [200, 429, 472, 473, 501, 503]
           deploy_dir: ~/openbao
 
     nocodb:
       hosts:
         "{{ nocodb_host }}":
           service_name: nocodb
+          service_repo: "git@github.com:uhstray-io/nocodb.git"
           service_url: "http://{{ nocodb_host }}:8181"
+          health_path: "/api/v1/health"
           deploy_dir: ~/nocodb
 
     n8n:
       hosts:
         "{{ n8n_host }}":
           service_name: n8n
+          service_repo: "git@github.com:uhstray-io/n8n.git"
           service_url: "http://{{ n8n_host }}:5678"
+          health_path: "/healthz"
           deploy_dir: ~/n8n
 
     semaphore_svc:
       hosts:
         "{{ semaphore_host }}":
           service_name: semaphore
+          service_repo: "git@github.com:uhstray-io/semaphore.git"
           service_url: "http://{{ semaphore_host }}:3000"
+          health_path: "/api/ping"
           deploy_dir: ~/semaphore
 
     netbox:
@@ -37,6 +46,7 @@ all:
         "{{ netbox_host }}":
           service_name: netbox
           service_url: "http://{{ netbox_host }}:8000"
+          health_path: "/api/status/"
           deploy_dir: ~/netbox
 
     nemoclaw:

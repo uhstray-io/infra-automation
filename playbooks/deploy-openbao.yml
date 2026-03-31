@@ -1,62 +1,8 @@
 ---
-# deploy-openbao.yml — Clone uhstray-io/openbao repo and run deploy.sh
-# Fully rootless: clones to ~/openbao, runs podman as uhstray user.
-# Only 'apt install git' requires become.
-
+# deploy-openbao.yml — Thin wrapper for deploy-service.yml
+# OpenBao bootstrap note: if OpenBao is not yet available to fetch the deploy key,
+# pass it manually: -e github_deploy_key="$(cat key)" or via Semaphore extra var.
 - name: "Deploy OpenBao"
-  hosts: openbao
-  gather_facts: false
+  import_playbook: deploy-service.yml
   vars:
-    openbao_repo: "git@github.com:uhstray-io/openbao.git"
-    openbao_deploy_dir: "/home/{{ ansible_user | default('uhstray') }}/openbao"
-    openbao_branch: main
-
-  tasks:
-    - name: "Install git if needed"
-      ansible.builtin.apt:
-        name: git
-        state: present
-      become: true
-
-    - name: "Add GitHub to known hosts"
-      ansible.builtin.known_hosts:
-        name: github.com
-        key: "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
-        state: present
-
-    - name: "Clone or update openbao repo"
-      ansible.builtin.git:
-        repo: "{{ openbao_repo }}"
-        dest: "{{ openbao_deploy_dir }}"
-        version: "{{ openbao_branch }}"
-        force: true
-        accept_hostkey: true
-        key_file: "/home/{{ ansible_user | default('uhstray') }}/.ssh/openbao_deploy_key"
-
-    - name: "Run deploy.sh"
-      ansible.builtin.shell: |
-        cd {{ openbao_deploy_dir }}
-        bash deploy.sh
-      register: deploy_result
-      changed_when: true
-
-    - name: "Show deploy output"
-      ansible.builtin.debug:
-        var: deploy_result.stdout_lines
-
-    - name: "Verify OpenBao health"
-      ansible.builtin.uri:
-        url: "http://{{ ansible_host }}:8200/v1/sys/health"
-        method: GET
-        status_code: [200, 429, 472, 473, 501, 503]
-        validate_certs: false
-      register: health
-      retries: 5
-      delay: 5
-
-    - name: "OpenBao status"
-      ansible.builtin.debug:
-        msg: |
-          OpenBao at {{ ansible_host }}:8200
-          Initialized: {{ health.json.initialized | default('unknown') }}
-          Sealed: {{ health.json.sealed | default('unknown') }}
+    target_service: openbao

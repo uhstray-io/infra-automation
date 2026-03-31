@@ -1,0 +1,6 @@
+---
+# deploy-n8n.yml — Thin wrapper for deploy-service.yml
+- name: "Deploy n8n"
+  import_playbook: deploy-service.yml
+  vars:
+    target_service: n8n
